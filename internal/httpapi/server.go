@@ -114,7 +114,8 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("readiness dependency is not configured"))
 		return
 	}
-	probeDone := startReadinessProbe(r.Context(), 2*time.Second, s.Readiness)
+	probeDone, cancelProbe := startReadinessProbe(r.Context(), 2*time.Second, s.Readiness)
+	defer cancelProbe()
 	var err error
 	select {
 	case err = <-probeDone:

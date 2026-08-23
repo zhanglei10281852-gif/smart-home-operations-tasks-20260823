@@ -21,14 +21,14 @@ func RequestID(ctx context.Context) string {
 	return value
 }
 
-func startReadinessProbe(parent context.Context, timeout time.Duration, probe func(context.Context) error) <-chan error {
+func startReadinessProbe(parent context.Context, timeout time.Duration, probe func(context.Context) error) (<-chan error, context.CancelFunc) {
 	done := make(chan error, 1)
-	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+	probeCtx, cancel := context.WithTimeout(parent, timeout)
 	go func() {
 		defer cancel()
 		done <- probe(probeCtx)
 	}()
-	return done
+	return done, cancel
 }
 
 func accessLog(next http.Handler, logger *slog.Logger) http.Handler {

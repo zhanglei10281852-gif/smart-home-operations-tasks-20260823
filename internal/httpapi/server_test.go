@@ -85,6 +85,50 @@ func TestReadyChecksDependencyAndKeepsRequestID(t *testing.T) {
 	}
 }
 
+func TestReadyCancelsProbeWhenClientDisconnects(t *testing.T) {
+	s := NewServer(nil, nil, nil, nil, nil, nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	probeStarted := make(chan struct{})
+	probeCtxC := make(chan context.Context, 1)
+	blocked := make(chan struct{})
+	s.Readiness = func(probeCtx context.Context) error {
+		probeCtxC <- probeCtx
+		close(probeStarted)
+		select {
+		case <-probeCtx.Done():
+			return probeCtx.Err()
+		case <-blocked:
+			return nil
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(ctx)
+	request.Header.Set("X-Request-ID", "req-disconnect")
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		s.Handler().ServeHTTP(recorder, request)
+		close(done)
+	}()
+	<-probeStarted
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ready handler did not return after client disconnect")
+	}
+	select {
+	case probeCtx := <-probeCtxC:
+		select {
+		case <-probeCtx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("probe context was not cancelled after client disconnect")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("probe was never invoked")
+	}
+	close(blocked)
+}
+
 func TestAuthenticatedTelemetryIsTenantScoped(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
 	authRepo := &authHTTPRepo{
