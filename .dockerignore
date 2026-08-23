@@ -1,0 +1,8 @@
+.git
+.gitignore
+.env
+.env.local
+*.log
+coverage.out
+smart-home
+
