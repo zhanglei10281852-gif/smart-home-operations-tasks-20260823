@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -35,6 +36,17 @@ func (w *responseState) Write(data []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(data)
+}
+
+func (w *responseState) ReadFrom(reader io.Reader) (int64, error) {
+	if !w.committed {
+		w.status = http.StatusOK
+		w.committed = true
+	}
+	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(reader)
+	}
+	return io.Copy(w.ResponseWriter, reader)
 }
 
 func (w *responseState) Unwrap() http.ResponseWriter { return w.ResponseWriter }

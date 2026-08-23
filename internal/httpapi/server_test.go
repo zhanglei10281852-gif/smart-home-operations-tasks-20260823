@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,6 +125,24 @@ func TestRecoveryDoesNotAppendErrorAfterCommittedResponse(t *testing.T) {
 		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestRecoveryDoesNotAppendErrorAfterStreamedResponse(t *testing.T) {
+	handler := recoverer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// A plain io.Reader (no WriteTo) forces the destination's ReadFrom fast path.
+		_, _ = io.Copy(w, &plainReader{r: strings.NewReader(`{"ok":true}`)})
+		panic("after stream")
+	}), nil)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"ok":true}` {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
+type plainReader struct{ r io.Reader }
+
+func (p *plainReader) Read(b []byte) (int, error) { return p.r.Read(b) }
 
 func TestBusinessValidationErrorsMapToStableHTTPStatuses(t *testing.T) {
 	cases := []struct {

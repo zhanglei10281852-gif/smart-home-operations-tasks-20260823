@@ -56,6 +56,10 @@ func (w *statusWriter) Write(data []byte) (int, error) {
 }
 
 func (w *statusWriter) ReadFrom(reader io.Reader) (int64, error) {
+	if !w.committed {
+		w.status = http.StatusOK
+		w.committed = true
+	}
 	w.streamed = true
 	return io.Copy(w.ResponseWriter, reader)
 }
