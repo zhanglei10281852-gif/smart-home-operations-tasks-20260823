@@ -81,16 +81,12 @@ func ExecuteBatch(ctx context.Context, items []BatchItem, execute func(context.C
 			}
 		}()
 	}
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return results, ctx.Err()
-	}
+	// Wait for every in-flight operation to settle before returning. Even when
+	// the context is cancelled after work has started, the caller must receive a
+	// complete, stable per-device slice; returning early on ctx.Done() would
+	// hand back zero-value entries while the goroutines keep writing results in
+	// the background (a data race on top of incomplete output).
+	wg.Wait()
 	if ctx.Err() != nil {
 		return results, ctx.Err()
 	}

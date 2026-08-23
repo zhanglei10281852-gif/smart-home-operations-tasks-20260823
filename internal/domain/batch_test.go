@@ -65,6 +65,59 @@ func TestExecuteBatchCancellation(t *testing.T) {
 	}
 }
 
+// TestExecuteBatchWaitsForStartedWorkOnCancel guards against a regression where a
+// cancellation arriving after work has begun caused ExecuteBatch to return
+// zero-value results while the started goroutines kept running in the background.
+func TestExecuteBatchWaitsForStartedWorkOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	items := []BatchItem{{DeviceID: 1, Action: "on"}, {DeviceID: 2, Action: "off"}}
+	type outcome struct {
+		results []BatchResult
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		results, err := ExecuteBatch(ctx, items, func(ctx context.Context, item BatchItem) error {
+			started <- struct{}{}
+			<-release
+			return nil
+		})
+		done <- outcome{results: results, err: err}
+	}()
+	// Wait until both commands have started, then cancel mid-flight.
+	<-started
+	<-started
+	cancel()
+	// Even after cancellation, the caller must block until the started work
+	// resolves. ExecuteBatch must not return before release is closed.
+	select {
+	case <-done:
+		t.Fatal("returned before started work settled")
+	default:
+	}
+	close(release)
+	out := <-done
+	if !errors.Is(out.err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", out.err)
+	}
+	if len(out.results) != 2 {
+		t.Fatalf("results=%d want 2", len(out.results))
+	}
+	for _, r := range out.results {
+		if r.DeviceID == 0 {
+			t.Errorf("zero-value result leaked: %+v", r)
+		}
+		if r.Started.IsZero() || r.Finished.IsZero() {
+			t.Errorf("result missing timestamps: %+v", r)
+		}
+		if !r.Accepted {
+			t.Errorf("started work not reported as settled: %+v", r)
+		}
+	}
+}
+
 func TestQuotaAndSafeAverage(t *testing.T) {
 	now := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
 	q := Quota{Name: "commands", Limit: 5, Used: 2, ResetAt: now.Add(time.Hour)}
