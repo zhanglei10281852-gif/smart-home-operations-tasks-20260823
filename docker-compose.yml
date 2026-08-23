@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: smart_home
+      POSTGRES_USER: smart_home
+      POSTGRES_PASSWORD: smart_home
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_home -d smart_home"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
