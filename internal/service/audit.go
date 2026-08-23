@@ -1,0 +1,29 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
+)
+
+type AuditService struct {
+	Repo interface {
+		AddAudit(context.Context, model.AuditEvent) error
+	}
+}
+
+func NewAudit(r interface {
+	AddAudit(context.Context, model.AuditEvent) error
+}) *AuditService {
+	return &AuditService{Repo: r}
+}
+func (s *AuditService) Record(ctx context.Context, household int64, member *int64, requestID, objectType, objectID, action string, payload any) error {
+	if household <= 0 || requestID == "" || objectType == "" || objectID == "" || action == "" {
+		return model.ErrInvalid
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return s.Repo.AddAudit(ctx, model.AuditEvent{HouseholdID: household, ActorMemberID: member, RequestID: requestID, ObjectType: objectType, ObjectID: objectID, Action: action, Payload: data})
+}
