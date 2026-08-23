@@ -18,13 +18,13 @@ func TestRequestIDContextAndAccessLog(t *testing.T) {
 	request.Header.Set("X-Request-ID", "req-test")
 	recorder := httptest.NewRecorder()
 	called := false
-	handler := accessLog(withRequestContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := requestID(accessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		if RequestID(r.Context()) != "req-test" {
 			t.Fatalf("request id=%q", RequestID(r.Context()))
 		}
 		w.WriteHeader(http.StatusNoContent)
-	})), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}), slog.New(slog.NewTextHandler(io.Discard, nil))))
 	handler.ServeHTTP(recorder, request)
 	if !called || recorder.Code != http.StatusNoContent || recorder.Header().Get("X-Request-ID") != "req-test" {
 		t.Fatalf("called=%v status=%d headers=%v", called, recorder.Code, recorder.Header())
@@ -42,6 +42,10 @@ func TestDecodeStrictRejectsUnknownAndTrailing(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"unexpected":true}`))
 	if err := decodeStrict(request, &value); err == nil {
 		t.Fatal("unknown JSON field accepted")
+	}
+	request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"ok"} trailing`))
+	if err := decodeStrict(request, &value); err == nil {
+		t.Fatal("malformed trailing content accepted")
 	}
 }
 

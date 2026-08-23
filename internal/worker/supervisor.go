@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -21,6 +22,12 @@ type Supervisor struct {
 func (s *Supervisor) Start(ctx context.Context) {
 	for _, job := range s.Jobs {
 		j := job
+		if j.Run == nil {
+			if s.Logger != nil {
+				s.Logger.Error("supervised job is not configured", "job", j.Name)
+			}
+			continue
+		}
 		if j.Interval <= 0 {
 			j.Interval = time.Minute
 		}
@@ -45,6 +52,9 @@ func (s *Supervisor) Start(ctx context.Context) {
 func (s *Supervisor) Wait() { s.wg.Wait() }
 func RunOnce(ctx context.Context, jobs []Job) error {
 	for _, job := range jobs {
+		if job.Run == nil {
+			return errors.New("supervised job is not configured")
+		}
 		if err := job.Run(ctx); err != nil {
 			return err
 		}

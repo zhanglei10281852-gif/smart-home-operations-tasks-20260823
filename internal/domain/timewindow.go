@@ -20,7 +20,7 @@ func (w TimeWindow) Validate(max time.Duration) error {
 }
 
 func (w TimeWindow) Contains(at time.Time) bool {
-	if w.Start.IsZero() || w.End.IsZero() {
+	if w.Start.IsZero() || w.End.IsZero() || w.Zone == nil {
 		return false
 	}
 	at = at.In(w.Zone)

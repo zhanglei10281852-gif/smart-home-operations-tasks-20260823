@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 )
 
@@ -18,6 +19,9 @@ func NewAudit(r interface {
 	return &AuditService{Repo: r}
 }
 func (s *AuditService) Record(ctx context.Context, household int64, member *int64, requestID, objectType, objectID, action string, payload any) error {
+	if s == nil || s.Repo == nil {
+		return errors.New("audit service is not configured")
+	}
 	if household <= 0 || requestID == "" || objectType == "" || objectID == "" || action == "" {
 		return model.ErrInvalid
 	}

@@ -52,15 +52,20 @@ func EnergyWh(samples []Sample) float64 {
 	if len(samples) < 2 {
 		return 0
 	}
-	ordered := append([]Sample(nil), samples...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].At.Before(ordered[j].At) })
+	byDevice := make(map[int64][]Sample)
+	for _, sample := range samples {
+		byDevice[sample.DeviceID] = append(byDevice[sample.DeviceID], sample)
+	}
 	total := 0.0
-	for i := 1; i < len(ordered); i++ {
-		duration := ordered[i].At.Sub(ordered[i-1].At).Hours()
-		if duration < 0 || duration > 24 {
-			continue
+	for _, deviceSamples := range byDevice {
+		sort.Slice(deviceSamples, func(i, j int) bool { return deviceSamples[i].At.Before(deviceSamples[j].At) })
+		for i := 1; i < len(deviceSamples); i++ {
+			duration := deviceSamples[i].At.Sub(deviceSamples[i-1].At).Hours()
+			if duration <= 0 || duration > 24 {
+				continue
+			}
+			total += (deviceSamples[i-1].Watts + deviceSamples[i].Watts) / 2 * duration
 		}
-		total += (ordered[i-1].Watts + ordered[i].Watts) / 2 * duration
 	}
 	return total
 }
@@ -73,6 +78,9 @@ func Bucketize(samples []Sample, start, end time.Time, step time.Duration) []Buc
 	for i := range out {
 		out[i].Start = start.Add(time.Duration(i) * step)
 		out[i].End = out[i].Start.Add(step)
+		if out[i].End.After(end) {
+			out[i].End = end
+		}
 	}
 	for _, sample := range samples {
 		if sample.At.Before(start) || !sample.At.Before(end) {

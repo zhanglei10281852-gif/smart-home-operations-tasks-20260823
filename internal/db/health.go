@@ -19,6 +19,9 @@ func (d *DB) Health(ctx context.Context, now func() time.Time) (HealthReport, er
 	if d == nil || d.SQL == nil {
 		return HealthReport{}, errors.New("database is not configured")
 	}
+	if now == nil {
+		now = time.Now
+	}
 	started := time.Now()
 	if err := d.SQL.PingContext(ctx); err != nil {
 		return HealthReport{Latency: time.Since(started), At: now()}, err
@@ -38,10 +41,10 @@ func (d *DB) WithReadOnlyTx(ctx context.Context, fn func(context.Context, *sql.T
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	txctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if err := fn(txctx, tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

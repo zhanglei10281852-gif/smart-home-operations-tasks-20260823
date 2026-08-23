@@ -161,6 +161,8 @@ type OutboxMessage struct {
 	Attempts              int
 	AvailableAt           time.Time
 	LockedAt, DeliveredAt *time.Time
+	FailedAt              *time.Time
+	FailureReason         *string
 }
 
 type Clock interface{ Now() time.Time }

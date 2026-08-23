@@ -21,10 +21,7 @@ func ValidateDatabaseURL(raw string) error {
 	return nil
 }
 func ValidateHTTPAddr(addr string) error {
-	if !strings.HasPrefix(addr, ":") && addr != "localhost" {
-		return errors.New("HTTP_ADDR must bind locally")
-	}
-	return nil
+	return validateListenAddr(strings.TrimSpace(addr))
 }
 func ValidateShutdown(timeout time.Duration) error {
 	if timeout < time.Second || timeout > 5*time.Minute {

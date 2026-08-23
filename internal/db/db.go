@@ -34,13 +34,16 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 }
 func (d *DB) Close() error { return d.SQL.Close() }
 func (d *DB) WithTx(ctx context.Context, fn func(context.Context) error) error {
+	if d == nil || d.SQL == nil || fn == nil {
+		return fmt.Errorf("transaction is not configured")
+	}
 	tx, err := d.SQL.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	defer tx.Rollback()
 	txctx := context.WithValue(ctx, txKey{}, tx)
 	if err = fn(txctx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -62,7 +65,24 @@ func Executor(ctx context.Context, database *DB) interface {
 	return database.SQL
 }
 func Migrate(ctx context.Context, database *DB) error {
-	if _, err := database.SQL.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
+	if database == nil || database.SQL == nil {
+		return fmt.Errorf("database is not configured")
+	}
+	conn, err := database.SQL.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Close()
+	const migrationLockID int64 = 0x534d415254484f4d
+	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, migrationLockID); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, migrationLockID)
+	}()
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
 	entries, err := fs.ReadDir(migrationFS, "migrations")
@@ -78,7 +98,7 @@ func Migrate(ctx context.Context, database *DB) error {
 	sort.Strings(versions)
 	for _, version := range versions {
 		var applied bool
-		if err := database.SQL.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, version).Scan(&applied); err != nil {
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, version).Scan(&applied); err != nil {
 			return err
 		}
 		if applied {
@@ -88,15 +108,19 @@ func Migrate(ctx context.Context, database *DB) error {
 		if readErr != nil {
 			return readErr
 		}
-		if err := database.WithTx(ctx, func(txctx context.Context) error {
-			executor := Executor(txctx, database)
-			if _, e := executor.ExecContext(txctx, string(content)); e != nil {
-				return e
-			}
-			_, e := executor.ExecContext(txctx, `INSERT INTO schema_migrations(version) VALUES($1)`, version)
-			return e
-		}); err != nil {
+		tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+		if err != nil {
+			return fmt.Errorf("begin migration %s: %w", version, err)
+		}
+		if _, err = tx.ExecContext(ctx, string(content)); err == nil {
+			_, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES($1)`, version)
+		}
+		if err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("migration %s: %w", version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration %s: %w", version, err)
 		}
 	}
 	return nil

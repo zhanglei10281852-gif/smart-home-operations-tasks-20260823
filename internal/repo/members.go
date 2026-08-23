@@ -11,7 +11,10 @@ func (r *Repository) SetMemberActive(ctx context.Context, id int64, active bool)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return model.ErrNotFound
 	}

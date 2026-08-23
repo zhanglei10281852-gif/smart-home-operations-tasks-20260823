@@ -36,4 +36,11 @@ func TestHealthChecksAndGuardedRunner(t *testing.T) {
 	if err := (GuardedRunner{Run: func(context.Context) error { return errors.New("failed") }}).Serve(context.Background()); err == nil {
 		t.Fatal("worker error swallowed")
 	}
+	if err := (GuardedRunner{Run: func(context.Context) error { panic("failed") }}).Serve(context.Background()); err == nil {
+		t.Fatal("worker panic swallowed")
+	}
+	results = RunHealthChecks(context.Background(), map[string]HealthCheck{"missing": nil}, nil)
+	if len(results) != 1 || results[0].Healthy || results[0].Error == "" {
+		t.Fatalf("nil health check results=%+v", results)
+	}
 }

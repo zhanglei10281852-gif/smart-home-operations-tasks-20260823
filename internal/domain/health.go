@@ -23,8 +23,17 @@ func RunChecks(ctx context.Context, checks []Check) []Status {
 	out := make([]Status, 0, len(checks))
 	for _, check := range checks {
 		start := time.Now()
-		checkCtx, cancel := context.WithTimeout(ctx, check.Timeout)
-		err := check.Run(checkCtx)
+		checkCtx := ctx
+		cancel := func() {}
+		if check.Timeout > 0 {
+			checkCtx, cancel = context.WithTimeout(ctx, check.Timeout)
+		}
+		var err error
+		if check.Run == nil {
+			err = fmt.Errorf("health check %q is not configured", check.Name)
+		} else {
+			err = check.Run(checkCtx)
+		}
 		cancel()
 		status := Status{Name: check.Name, Healthy: err == nil, Duration: time.Since(start)}
 		if err != nil {

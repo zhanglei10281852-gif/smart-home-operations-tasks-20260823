@@ -13,8 +13,15 @@ func TestSummarize(t *testing.T) {
 	if s.DeviceCount != 2 || s.Samples != 3 || s.PeakWatts != 30 || s.AverageWatts != 20 {
 		t.Fatalf("summary=%+v", s)
 	}
-	if math.Abs(s.WattHours-40) > 0.001 {
+	if math.Abs(s.WattHours-15) > 0.001 {
 		t.Fatalf("energy=%v", s.WattHours)
+	}
+}
+func TestEnergyNeverIntegratesAcrossDevices(t *testing.T) {
+	base := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
+	rows := []Sample{{DeviceID: 1, At: base, Watts: 10}, {DeviceID: 2, At: base.Add(time.Hour), Watts: 100}}
+	if got := EnergyWh(rows); got != 0 {
+		t.Fatalf("cross-device energy=%v", got)
 	}
 }
 func TestBucketize(t *testing.T) {
@@ -23,6 +30,17 @@ func TestBucketize(t *testing.T) {
 	b := Bucketize(rows, base, base.Add(2*time.Hour), time.Hour)
 	if len(b) != 2 || b[0].Samples != 2 || b[1].Samples != 1 {
 		t.Fatalf("buckets=%+v", b)
+	}
+}
+
+func TestBucketizeClampsFinalBucketToRequestedWindow(t *testing.T) {
+	base := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
+	buckets := Bucketize([]Sample{{At: base.Add(70 * time.Minute), Watts: 60}}, base, base.Add(90*time.Minute), time.Hour)
+	if len(buckets) != 2 || !buckets[1].End.Equal(base.Add(90*time.Minute)) {
+		t.Fatalf("buckets=%+v", buckets)
+	}
+	if math.Abs(buckets[1].WattHours-30) > 0.001 {
+		t.Fatalf("partial bucket energy=%v", buckets[1].WattHours)
 	}
 }
 func TestPercentile(t *testing.T) {

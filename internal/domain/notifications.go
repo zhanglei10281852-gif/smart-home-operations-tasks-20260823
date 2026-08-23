@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,6 +29,9 @@ func ValidateNotification(n Notification) error {
 func Send(ctx context.Context, n Notifier, msg Notification) error {
 	if err := ValidateNotification(msg); err != nil {
 		return err
+	}
+	if n == nil {
+		return errors.New("notifier is not configured")
 	}
 	select {
 	case <-ctx.Done():

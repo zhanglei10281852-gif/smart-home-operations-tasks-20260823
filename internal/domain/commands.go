@@ -39,6 +39,9 @@ func Dispatch(ctx context.Context, executor CommandExecutor, c Command) (Command
 	if err := ValidateCommand(c); err != nil {
 		return CommandResult{}, err
 	}
+	if executor == nil {
+		return CommandResult{}, errors.New("command executor is not configured")
+	}
 	select {
 	case <-ctx.Done():
 		return CommandResult{}, ctx.Err()

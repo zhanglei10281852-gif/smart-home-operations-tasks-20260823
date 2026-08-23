@@ -28,20 +28,19 @@ func (p RequestPolicy) Validate() error {
 	return nil
 }
 
-func (p RequestPolicy) Apply(ctx context.Context, req *http.Request) (*http.Request, error) {
+func (p RequestPolicy) Apply(ctx context.Context, req *http.Request) (*http.Request, context.CancelFunc, error) {
 	if req == nil {
-		return nil, errors.New("request is nil")
+		return nil, nil, errors.New("request is nil")
 	}
 	if err := p.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !p.AllowedMethods[req.Method] {
-		return nil, fmt.Errorf("method %s is not allowed", req.Method)
+		return nil, nil, fmt.Errorf("method %s is not allowed", req.Method)
 	}
 	if p.RequireToken && strings.TrimSpace(req.Header.Get("Authorization")) == "" {
-		return nil, errors.New("authorization is required")
+		return nil, nil, errors.New("authorization is required")
 	}
 	derived, cancel := context.WithTimeout(ctx, p.Timeout)
-	_ = cancel
-	return req.WithContext(derived), nil
+	return req.WithContext(derived), cancel, nil
 }

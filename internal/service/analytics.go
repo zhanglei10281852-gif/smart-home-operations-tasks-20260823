@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/analytics"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 	"time"
@@ -19,6 +20,9 @@ func NewAnalytics(r interface {
 	return &AnalyticsService{Repo: r}
 }
 func (s *AnalyticsService) DeviceSummary(ctx context.Context, id int64, start, end time.Time) (analytics.Summary, error) {
+	if s == nil || s.Repo == nil {
+		return analytics.Summary{}, errors.New("analytics service is not configured")
+	}
 	rows, err := s.Repo.TelemetryWindow(ctx, id, start, end)
 	if err != nil {
 		return analytics.Summary{}, err
@@ -30,11 +34,9 @@ func (s *AnalyticsService) DeviceSummary(ctx context.Context, id int64, start, e
 	return analytics.Summarize(samples), nil
 }
 func (s *AnalyticsService) Buckets(ctx context.Context, id int64, start, end time.Time, step time.Duration) ([]analytics.Bucket, error) {
-	summary, err := s.DeviceSummary(ctx, id, start, end)
-	if err != nil {
-		return nil, err
+	if s == nil || s.Repo == nil {
+		return nil, errors.New("analytics service is not configured")
 	}
-	_ = summary
 	rows, err := s.Repo.TelemetryWindow(ctx, id, start, end)
 	if err != nil {
 		return nil, err

@@ -72,7 +72,7 @@ func NormalizeRole(role Role) (Role, error) {
 }
 
 func (s Session) ActiveAt(now time.Time) bool {
-	return !s.CreatedAt.After(now) && (s.RevokedAt == nil || s.RevokedAt.After(now)) && now.Before(s.ExpiresAt)
+	return s.ID != "" && s.MemberID > 0 && !s.CreatedAt.IsZero() && !s.ExpiresAt.IsZero() && !s.CreatedAt.After(now) && s.RevokedAt == nil && now.Before(s.ExpiresAt)
 }
 
 func (p EnergyPlan) Within(now time.Time) bool {
@@ -85,7 +85,9 @@ func (a AuditEvent) Complete() bool {
 
 func (m Member) Can(role Role) bool {
 	levels := map[Role]int{RoleViewer: 1, RoleOperator: 2, RoleOwner: 3}
-	return m.Active && levels[m.Role] >= levels[role]
+	actual, actualOK := levels[m.Role]
+	required, requiredOK := levels[role]
+	return m.Active && actualOK && requiredOK && actual >= required
 }
 
 func (d Device) Operational() bool {

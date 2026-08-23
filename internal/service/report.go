@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 	"sort"
 	"time"
@@ -47,6 +48,9 @@ func SortTelemetry(rows []model.Telemetry) []model.Telemetry {
 	return out
 }
 func (s *ReportService) Telemetry(ctx context.Context, id int64, start, end time.Time) (DeviceReport, error) {
+	if s == nil || s.Repo == nil {
+		return DeviceReport{}, errors.New("report service is not configured")
+	}
 	rows, err := s.Repo.TelemetryWindow(ctx, id, start, end)
 	if err != nil {
 		return DeviceReport{}, err

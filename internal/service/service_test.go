@@ -18,6 +18,8 @@ type fakeRepo struct {
 	deviceErr     error
 	transitionErr error
 	telemetry     []model.Telemetry
+	plan          model.EnergyPlan
+	automation    model.Automation
 	run           model.AutomationRun
 	finishErr     error
 }
@@ -40,6 +42,9 @@ func (f *fakeRepo) MemberByID(context.Context, int64) (model.Member, error) { re
 func (f *fakeRepo) CreateHousehold(context.Context, string, string, int64) (model.Household, error) {
 	return model.Household{ID: 1}, nil
 }
+func (f *fakeRepo) CreateHouseholdWithOwner(context.Context, string, string, int64, string, string) (model.Household, model.Member, error) {
+	return model.Household{ID: 1}, f.member, nil
+}
 func (f *fakeRepo) CreateDevice(context.Context, model.Device, []string) (model.Device, error) {
 	return f.device, nil
 }
@@ -54,14 +59,35 @@ func (f *fakeRepo) InsertTelemetry(context.Context, model.Telemetry) error { ret
 func (f *fakeRepo) TelemetryWindow(context.Context, int64, time.Time, time.Time) ([]model.Telemetry, error) {
 	return f.telemetry, nil
 }
-func (f *fakeRepo) CreatePlan(context.Context, model.EnergyPlan, []model.PlanDevice) (model.EnergyPlan, error) {
-	return model.EnergyPlan{ID: 7}, nil
+func (f *fakeRepo) CreatePlan(_ context.Context, plan model.EnergyPlan, _ []model.PlanDevice) (model.EnergyPlan, error) {
+	f.plan = plan
+	f.plan.ID = 7
+	f.plan.State = model.PlanDraft
+	return f.plan, nil
 }
-func (f *fakeRepo) SetPlanState(context.Context, int64, model.PlanState, model.PlanState) error {
+func (f *fakeRepo) GetPlan(context.Context, int64) (model.EnergyPlan, error) { return f.plan, nil }
+func (f *fakeRepo) SetPlanState(_ context.Context, _ int64, from, to model.PlanState) error {
+	if f.plan.State != from {
+		return model.ErrConflict
+	}
+	f.plan.State = to
 	return nil
 }
-func (f *fakeRepo) CreateAutomation(context.Context, model.Automation, []model.AutomationAction) (model.Automation, error) {
-	return model.Automation{ID: 8}, nil
+func (f *fakeRepo) CreateAutomation(_ context.Context, automation model.Automation, _ []model.AutomationAction) (model.Automation, error) {
+	f.automation = automation
+	f.automation.ID = 8
+	f.automation.State = model.AutomationDraft
+	return f.automation, nil
+}
+func (f *fakeRepo) GetAutomation(context.Context, int64) (model.Automation, error) {
+	return f.automation, nil
+}
+func (f *fakeRepo) SetAutomationState(_ context.Context, _ int64, from, to model.AutomationState) error {
+	if f.automation.State != from {
+		return model.ErrConflict
+	}
+	f.automation.State = to
+	return nil
 }
 func (f *fakeRepo) QueueRun(context.Context, int64, string) (model.AutomationRun, error) {
 	return f.run, nil
@@ -69,12 +95,17 @@ func (f *fakeRepo) QueueRun(context.Context, int64, string) (model.AutomationRun
 func (f *fakeRepo) FinishRun(context.Context, int64, model.RunState, string, time.Time) error {
 	return f.finishErr
 }
-func (f *fakeRepo) AddAudit(context.Context, model.AuditEvent) error     { return nil }
-func (f *fakeRepo) AddOutbox(context.Context, model.OutboxMessage) error { return nil }
+func (f *fakeRepo) ExecuteAutomationRun(context.Context, int64, time.Time) error { return f.finishErr }
+func (f *fakeRepo) AddAudit(context.Context, model.AuditEvent) error             { return nil }
+func (f *fakeRepo) AddOutbox(context.Context, model.OutboxMessage) error         { return nil }
 
 func TestAuthLoginAndLogout(t *testing.T) {
 	clock := FixedClock{Value: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
-	f := &fakeRepo{member: model.Member{ID: 3, HouseholdID: 1, Email: "user@example.com", Role: model.RoleOperator, Active: true}, hash: passwordDigest("correct-password")}
+	hash, err := hashPassword("correct-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRepo{member: model.Member{ID: 3, HouseholdID: 1, Email: "user@example.com", Role: model.RoleOperator, Active: true}, hash: hash}
 	a := NewAuth(nil, clock)
 	a.Repo = f
 	s, m, err := a.Login(context.Background(), 1, "user@example.com", "correct-password")
@@ -84,12 +115,33 @@ func TestAuthLoginAndLogout(t *testing.T) {
 	if s.ID == "" || m.ID != 3 || !s.ExpiresAt.Equal(clock.Value.Add(a.SessionTTL)) {
 		t.Fatalf("session=%+v member=%+v", s, m)
 	}
-	f.hash = passwordDigest("different")
+	f.hash, err = hashPassword("different")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := a.Login(context.Background(), 1, "user@example.com", "correct-password"); !errors.Is(err, model.ErrForbidden) {
 		t.Fatalf("wrong password err=%v", err)
 	}
 	if err := a.Logout(context.Background(), s.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+func TestPasswordHashUsesSaltAndRejectsMalformedValues(t *testing.T) {
+	first, err := hashPassword("correct-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := hashPassword("correct-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !passwordMatches(first, "correct-password") || passwordMatches(first, "wrong-password") {
+		t.Fatalf("password hashes were not salted or verified correctly")
+	}
+	for _, malformed := range []string{"", "pbkdf2-sha256$1$bad$bad", "sha256$210000$bad$bad"} {
+		if passwordMatches(malformed, "correct-password") {
+			t.Fatalf("malformed hash accepted: %q", malformed)
+		}
 	}
 }
 func TestAuthRejectsInvalidRegistration(t *testing.T) {
@@ -104,8 +156,9 @@ func TestAuthRejectsInvalidRegistration(t *testing.T) {
 	}
 }
 func TestAuthAuthorization(t *testing.T) {
-	f := &fakeRepo{member: model.Member{ID: 7, Role: model.RoleOperator, Active: true}, session: model.Session{ID: "s", MemberID: 7, ExpiresAt: time.Now().Add(time.Hour)}}
-	a := NewAuth(f, model.RealClock{})
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	f := &fakeRepo{member: model.Member{ID: 7, Role: model.RoleOperator, Active: true}, session: model.Session{ID: "s", MemberID: 7, ExpiresAt: now.Add(time.Hour)}}
+	a := NewAuth(f, FixedClock{Value: now})
 	if _, err := a.Authorize(context.Background(), "s", model.RoleOperator); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +168,17 @@ func TestAuthAuthorization(t *testing.T) {
 	f.member.Active = false
 	if _, err := a.Authorize(context.Background(), "s", model.RoleViewer); err == nil {
 		t.Fatal("inactive member authorized")
+	}
+	f.member.Active = true
+	f.session.ExpiresAt = now
+	if _, err := a.Authorize(context.Background(), "s", model.RoleViewer); !errors.Is(err, model.ErrForbidden) {
+		t.Fatalf("expired session err=%v", err)
+	}
+	f.session.ExpiresAt = now.Add(time.Hour)
+	revoked := now.Add(-time.Minute)
+	f.session.RevokedAt = &revoked
+	if _, err := a.Authorize(context.Background(), "s", model.RoleViewer); !errors.Is(err, model.ErrForbidden) {
+		t.Fatalf("revoked session err=%v", err)
 	}
 }
 
@@ -195,7 +259,7 @@ func TestTelemetryAverage(t *testing.T) {
 }
 
 func TestEnergyService(t *testing.T) {
-	clock := FixedClock{Value: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
+	clock := &FixedClock{Value: time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)}
 	f := &fakeRepo{}
 	s := NewEnergy(f, clock)
 	p, err := s.Draft(context.Background(), model.EnergyPlan{HouseholdID: 1, Name: "evening", BudgetCents: 100, StartsAt: clock.Value.Add(time.Hour), EndsAt: clock.Value.Add(2 * time.Hour)}, []model.PlanDevice{{DeviceID: 1, TargetWatts: 20}})
@@ -205,6 +269,7 @@ func TestEnergyService(t *testing.T) {
 	if err := s.Schedule(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
+	clock.Value = clock.Value.Add(time.Hour)
 	if err := s.Start(context.Background(), 7); err != nil {
 		t.Fatal(err)
 	}
@@ -219,13 +284,16 @@ func TestEnergyService(t *testing.T) {
 }
 
 func TestAutomationService(t *testing.T) {
-	f := &fakeRepo{run: model.AutomationRun{ID: 9, AutomationID: 3, State: model.RunQueued}}
+	f := &fakeRepo{device: model.Device{ID: 1, HouseholdID: 1, Kind: model.KindLight, State: model.DeviceEnabled}, run: model.AutomationRun{ID: 9, AutomationID: 8, State: model.RunQueued}}
 	a := NewAutomation(f, model.RealClock{})
 	created, err := a.Create(context.Background(), model.Automation{HouseholdID: 1, Name: "arrive", TriggerKind: "presence"}, []model.AutomationAction{{DeviceID: 1, Action: "on", Ordinal: 0}})
 	if err != nil || created.ID != 8 {
 		t.Fatalf("created=%+v err=%v", created, err)
 	}
-	run, err := a.Queue(context.Background(), 3, "key-1")
+	if err := a.Activate(context.Background(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	run, err := a.Queue(context.Background(), created.ID, "key-1")
 	if err != nil || run.ID != 9 {
 		t.Fatalf("run=%+v err=%v", run, err)
 	}

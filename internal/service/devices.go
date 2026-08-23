@@ -2,7 +2,8 @@ package service
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"github.com/zhanglei10281852-gif/smart-home-operations/internal/domain"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 	"strings"
 	"time"
@@ -29,10 +30,26 @@ func NewDevices(r interface {
 func (s *DeviceService) Enroll(ctx context.Context, household int64, external string, kind model.DeviceKind, firmware string, caps []string) (model.Device, error) {
 	external = strings.TrimSpace(external)
 	firmware = strings.TrimSpace(firmware)
-	if household <= 0 || external == "" || firmware == "" || !validKind(kind) {
+	if household <= 0 || domain.ValidateExternalID(external) != nil || firmware == "" || !validKind(kind) {
 		return model.Device{}, model.ErrInvalid
 	}
-	return s.Repo.CreateDevice(ctx, model.Device{HouseholdID: household, ExternalID: external, Kind: kind, Firmware: firmware}, caps)
+	normalized := make([]string, 0, len(caps))
+	seen := make(map[string]struct{}, len(caps))
+	for _, capability := range caps {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "" {
+			return model.Device{}, model.ErrInvalid
+		}
+		if _, exists := seen[capability]; exists {
+			return model.Device{}, fmt.Errorf("%w: duplicate capability %s", model.ErrInvalid, capability)
+		}
+		seen[capability] = struct{}{}
+		normalized = append(normalized, capability)
+	}
+	if !domain.HasCapabilities(domain.RequiredCapabilities(kind), normalized) {
+		return model.Device{}, fmt.Errorf("%w: required device capabilities are missing", model.ErrInvalid)
+	}
+	return s.Repo.CreateDevice(ctx, model.Device{HouseholdID: household, ExternalID: external, Kind: kind, Firmware: firmware}, normalized)
 }
 func validKind(k model.DeviceKind) bool {
 	switch k {
@@ -48,7 +65,7 @@ func (s *DeviceService) Pair(ctx context.Context, id int64) error {
 		return err
 	}
 	if d.State != model.DevicePending {
-		return errors.New("device is not pending")
+		return fmt.Errorf("%w: device is not pending", model.ErrConflict)
 	}
 	return s.Repo.TransitionDevice(ctx, id, model.DevicePending, model.DevicePaired, d.Version)
 }
@@ -58,7 +75,7 @@ func (s *DeviceService) Enable(ctx context.Context, id int64) error {
 		return err
 	}
 	if d.State != model.DevicePaired && d.State != model.DeviceDisabled {
-		return errors.New("device cannot be enabled")
+		return fmt.Errorf("%w: device cannot be enabled", model.ErrConflict)
 	}
 	return s.Repo.TransitionDevice(ctx, id, d.State, model.DeviceEnabled, d.Version)
 }
@@ -68,7 +85,7 @@ func (s *DeviceService) Disable(ctx context.Context, id int64) error {
 		return err
 	}
 	if d.State != model.DeviceEnabled {
-		return errors.New("device cannot be disabled")
+		return fmt.Errorf("%w: device cannot be disabled", model.ErrConflict)
 	}
 	return s.Repo.TransitionDevice(ctx, id, d.State, model.DeviceDisabled, d.Version)
 }
@@ -94,5 +111,5 @@ func (s *DeviceService) Touch(ctx context.Context, id int64) error {
 	return s.Repo.TouchDevice(ctx, id, now)
 }
 func DeviceFresh(d model.Device, now time.Time, ttl time.Duration) bool {
-	return d.LastSeenAt != nil && now.Sub(*d.LastSeenAt) <= ttl
+	return ttl > 0 && d.LastSeenAt != nil && !d.LastSeenAt.After(now) && now.Sub(*d.LastSeenAt) <= ttl
 }

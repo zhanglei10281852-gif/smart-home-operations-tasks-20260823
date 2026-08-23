@@ -14,19 +14,22 @@ func (r *Repository) CreateAlert(ctx context.Context, a model.Alert) (model.Aler
 	}
 	var out model.Alert
 	err := r.executor(ctx).QueryRowContext(ctx, `INSERT INTO alerts(household_id,device_id,severity,code,state,details) VALUES($1,$2,$3,$4,'open',$5) RETURNING id,household_id,device_id,severity,code,state,details,created_at`, a.HouseholdID, a.DeviceID, a.Severity, a.Code, a.Details).Scan(&out.ID, &out.HouseholdID, &out.DeviceID, &out.Severity, &out.Code, &out.State, &out.Details, &out.CreatedAt)
-	return out, err
+	return out, classifyWriteError(err)
 }
 func (r *Repository) GetAlert(ctx context.Context, id int64) (model.Alert, error) {
 	var a model.Alert
 	err := r.executor(ctx).QueryRowContext(ctx, `SELECT id,household_id,device_id,severity,code,state,details,created_at,resolved_at FROM alerts WHERE id=$1`, id).Scan(&a.ID, &a.HouseholdID, &a.DeviceID, &a.Severity, &a.Code, &a.State, &a.Details, &a.CreatedAt, &a.ResolvedAt)
-	return a, err
+	return a, classifyReadError(err)
 }
 func (r *Repository) TransitionAlert(ctx context.Context, id int64, from, to string, now time.Time) error {
 	res, err := r.executor(ctx).ExecContext(ctx, `UPDATE alerts SET state=$2,resolved_at=CASE WHEN $2='resolved' THEN $3 ELSE resolved_at END WHERE id=$1 AND state=$4`, id, to, now, from)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return model.ErrConflict
 	}

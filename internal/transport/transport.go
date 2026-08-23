@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,8 +33,9 @@ type Request struct {
 }
 
 func (c *Client) Do(ctx context.Context, req Request, out any) error {
-	if c.HTTP == nil {
-		c.HTTP = &http.Client{Timeout: 10 * time.Second}
+	httpClient := c.HTTP
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	if req.Method == "" {
 		req.Method = http.MethodGet
@@ -41,13 +44,13 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 	if err != nil {
 		return err
 	}
-	var body strings.Reader
+	var encodedBody []byte
 	if req.Body != nil {
 		data, e := json.Marshal(req.Body)
 		if e != nil {
 			return e
 		}
-		body = *strings.NewReader(string(data))
+		encodedBody = data
 	}
 	attempts := c.Retry
 	if attempts < 1 {
@@ -55,7 +58,7 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 	}
 	var last error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		httpReq, err := http.NewRequestWithContext(ctx, req.Method, target, &body)
+		httpReq, err := http.NewRequestWithContext(ctx, req.Method, target, bytes.NewReader(encodedBody))
 		if err != nil {
 			return err
 		}
@@ -69,18 +72,25 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 		for k, v := range req.Headers {
 			httpReq.Header.Set(k, v)
 		}
-		resp, err := c.HTTP.Do(httpReq)
+		resp, err := httpClient.Do(httpReq)
 		if err != nil {
 			last = err
 		} else {
-			defer resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				if out == nil {
-					return nil
+					return drainAndClose(resp.Body)
 				}
-				return json.NewDecoder(resp.Body).Decode(out)
+				decodeErr := json.NewDecoder(resp.Body).Decode(out)
+				closeErr := resp.Body.Close()
+				if decodeErr != nil {
+					return decodeErr
+				}
+				return closeErr
 			}
 			last = fmt.Errorf("remote status %d", resp.StatusCode)
+			if closeErr := drainAndClose(resp.Body); closeErr != nil {
+				return closeErr
+			}
 			if resp.StatusCode < 500 {
 				return last
 			}
@@ -97,6 +107,18 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 	}
 	return last
 }
+
+func drainAndClose(body io.ReadCloser) error {
+	if body == nil {
+		return nil
+	}
+	_, copyErr := io.Copy(io.Discard, io.LimitReader(body, 1<<20))
+	closeErr := body.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
 func CheckURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
@@ -111,8 +133,21 @@ type Webhook struct {
 }
 
 func (w Webhook) Send(ctx context.Context, event any) error {
+	return w.SendWithKey(ctx, event, "")
+}
+
+func (w Webhook) SendWithKey(ctx context.Context, event any, idempotencyKey string) error {
 	if err := CheckURL(w.URL); err != nil {
 		return err
 	}
-	return w.Client.Do(ctx, Request{Method: http.MethodPost, Path: w.URL, Body: event}, nil)
+	if w.Client == nil {
+		return errors.New("webhook client is required")
+	}
+	client := *w.Client
+	client.BaseURL = strings.TrimRight(w.URL, "/")
+	headers := map[string]string{}
+	if idempotencyKey != "" {
+		headers["Idempotency-Key"] = idempotencyKey
+	}
+	return client.Do(ctx, Request{Method: http.MethodPost, Path: "", Body: event, Headers: headers}, nil)
 }

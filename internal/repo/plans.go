@@ -9,7 +9,7 @@ import (
 func (r *Repository) GetPlan(ctx context.Context, id int64) (model.EnergyPlan, error) {
 	var p model.EnergyPlan
 	err := r.executor(ctx).QueryRowContext(ctx, `SELECT id,household_id,name,state,budget_cents,starts_at,ends_at,created_at FROM energy_plans WHERE id=$1`, id).Scan(&p.ID, &p.HouseholdID, &p.Name, &p.State, &p.BudgetCents, &p.StartsAt, &p.EndsAt, &p.CreatedAt)
-	return p, err
+	return p, classifyReadError(err)
 }
 func (r *Repository) ListPlans(ctx context.Context, household int64, state model.PlanState) ([]model.EnergyPlan, error) {
 	query := `SELECT id,household_id,name,state,budget_cents,starts_at,ends_at,created_at FROM energy_plans WHERE household_id=$1`

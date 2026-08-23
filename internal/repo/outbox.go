@@ -18,7 +18,7 @@ func (r *Repository) ListOutbox(ctx context.Context, f OutboxFilter) ([]model.Ou
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 100
 	}
-	query := `SELECT id,household_id,topic,payload,attempts,available_at,locked_at,delivered_at FROM outbox_messages WHERE delivered_at IS NULL`
+	query := `SELECT id,household_id,topic,payload,attempts,available_at,locked_at,delivered_at,failed_at,failure_reason FROM outbox_messages WHERE delivered_at IS NULL AND failed_at IS NULL`
 	args := []any{}
 	if f.Topic != "" {
 		query += ` AND topic=$1`
@@ -38,7 +38,7 @@ func (r *Repository) ListOutbox(ctx context.Context, f OutboxFilter) ([]model.Ou
 	out := []model.OutboxMessage{}
 	for rows.Next() {
 		var m model.OutboxMessage
-		if err := rows.Scan(&m.ID, &m.HouseholdID, &m.Topic, &m.Payload, &m.Attempts, &m.AvailableAt, &m.LockedAt, &m.DeliveredAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.HouseholdID, &m.Topic, &m.Payload, &m.Attempts, &m.AvailableAt, &m.LockedAt, &m.DeliveredAt, &m.FailedAt, &m.FailureReason); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -51,12 +51,32 @@ func (r *Repository) RescheduleOutbox(ctx context.Context, id int64, attempt int
 		payload["error"] = err.Error()
 	}
 	data, _ := json.Marshal(payload)
-	_, e := r.executor(ctx).ExecContext(ctx, `UPDATE outbox_messages SET attempts=$2,available_at=$3,locked_at=NULL,payload=payload || $4::jsonb WHERE id=$1`, id, attempt, next, data)
-	return e
+	result, e := r.executor(ctx).ExecContext(ctx, `UPDATE outbox_messages SET attempts=$2,available_at=$3,locked_at=NULL,payload=payload || $4::jsonb WHERE id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, id, attempt, next, data)
+	if e != nil {
+		return e
+	}
+	affected, e := result.RowsAffected()
+	if e != nil {
+		return e
+	}
+	if affected != 1 {
+		return model.ErrConflict
+	}
+	return nil
 }
 func (r *Repository) MarkOutboxFailed(ctx context.Context, id int64, reason string) error {
-	_, err := r.executor(ctx).ExecContext(ctx, `UPDATE outbox_messages SET locked_at=NULL,payload=payload || jsonb_build_object('failure',$2),available_at=now()+interval '1 day' WHERE id=$1`, id, reason)
-	return err
+	result, err := r.executor(ctx).ExecContext(ctx, `UPDATE outbox_messages SET locked_at=NULL,failed_at=now(),failure_reason=$2 WHERE id=$1 AND delivered_at IS NULL AND failed_at IS NULL`, id, reason)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return model.ErrConflict
+	}
+	return nil
 }
 func itoa(v int) string {
 	switch v {

@@ -31,6 +31,9 @@ func LoadRuntime(getenv func(string) string) (Runtime, error) {
 	if r.HTTPAddr == "" {
 		r.HTTPAddr = ":8080"
 	}
+	if err := validateListenAddr(r.HTTPAddr); err != nil {
+		return Runtime{}, err
+	}
 	if raw := strings.TrimSpace(getenv("WORKER_COUNT")); raw != "" {
 		count, err := strconv.Atoi(raw)
 		if err != nil || count < 1 || count > 64 {
@@ -57,6 +60,12 @@ func LoadRuntime(getenv func(string) string) (Runtime, error) {
 func (r Runtime) Validate() error {
 	if strings.TrimSpace(r.DatabaseURL) == "" || strings.TrimSpace(r.HTTPAddr) == "" || r.Shutdown <= 0 || r.WorkerCount <= 0 || r.LogLevel == "" {
 		return errors.New("runtime configuration is incomplete")
+	}
+	if err := ValidateDatabaseURL(r.DatabaseURL); err != nil {
+		return err
+	}
+	if err := validateListenAddr(r.HTTPAddr); err != nil {
+		return err
 	}
 	return nil
 }

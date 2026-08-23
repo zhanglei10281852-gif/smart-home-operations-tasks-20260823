@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 )
@@ -63,6 +64,10 @@ func RunHealthChecks(ctx context.Context, checks map[string]HealthCheck, now fun
 	for name := range checks {
 		keys = append(keys, name)
 	}
+	sort.Strings(keys)
+	if now == nil {
+		now = time.Now
+	}
 	results := make([]Health, len(keys))
 	var wg sync.WaitGroup
 	for i, name := range keys {
@@ -70,7 +75,13 @@ func RunHealthChecks(ctx context.Context, checks map[string]HealthCheck, now fun
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := checks[name](ctx)
+			check := checks[name]
+			var err error
+			if check == nil {
+				err = fmt.Errorf("health check %q is not configured", name)
+			} else {
+				err = check(ctx)
+			}
 			results[i] = Health{Name: name, Healthy: err == nil, CheckedAt: now(), Error: errorString(err)}
 		}()
 	}
@@ -83,13 +94,16 @@ type GuardedRunner struct {
 	Run    func(context.Context) error
 }
 
-func (r GuardedRunner) Serve(ctx context.Context) error {
+func (r GuardedRunner) Serve(ctx context.Context) (err error) {
 	if r.Run == nil {
 		return errors.New("runner is not configured")
 	}
 	defer func() {
-		if value := recover(); value != nil && r.Logger != nil {
-			r.Logger.Error("worker panic recovered", "value", value)
+		if value := recover(); value != nil {
+			if r.Logger != nil {
+				r.Logger.Error("worker panic recovered", "value", value)
+			}
+			err = fmt.Errorf("worker panic: %v", value)
 		}
 	}()
 	if err := r.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 	"time"
 )
@@ -26,10 +26,10 @@ func (s *TelemetryService) Record(ctx context.Context, t model.Telemetry) error 
 		return model.ErrInvalid
 	}
 	if t.PowerWatts < 0 {
-		return errors.New("power must be non-negative")
+		return fmt.Errorf("%w: power must be non-negative", model.ErrInvalid)
 	}
 	if t.MeasuredAt.After(s.Clock.Now().Add(5 * time.Minute)) {
-		return errors.New("measurement is in the future")
+		return fmt.Errorf("%w: measurement is in the future", model.ErrInvalid)
 	}
 	return s.Repo.InsertTelemetry(ctx, t)
 }
@@ -38,7 +38,7 @@ func (s *TelemetryService) Window(ctx context.Context, deviceID int64, start, en
 		return nil, model.ErrInvalid
 	}
 	if end.Sub(start) > 7*24*time.Hour {
-		return nil, errors.New("window exceeds seven days")
+		return nil, fmt.Errorf("%w: window exceeds seven days", model.ErrInvalid)
 	}
 	return s.Repo.TelemetryWindow(ctx, deviceID, start, end)
 }

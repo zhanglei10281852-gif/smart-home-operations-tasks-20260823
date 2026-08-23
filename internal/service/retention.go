@@ -30,7 +30,7 @@ type RetentionReport struct {
 }
 
 func (s *RetentionService) Run(ctx context.Context, telemetryAge, sessionAge time.Duration) (RetentionReport, error) {
-	if s.Repo == nil || telemetryAge <= 0 || sessionAge <= 0 {
+	if s == nil || s.Repo == nil || s.Clock == nil || telemetryAge <= 0 || sessionAge <= 0 {
 		return RetentionReport{}, errors.New("retention is not configured")
 	}
 	now := s.Clock.Now()

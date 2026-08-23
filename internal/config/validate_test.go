@@ -1,9 +1,59 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestFromEnvAcceptsValidRuntimeConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost/smart_home?sslmode=disable")
+	t.Setenv("HTTP_ADDR", "127.0.0.1:9080")
+	t.Setenv("WORKER_COUNT", "4")
+	t.Setenv("RETRY_LIMIT", "7")
+	t.Setenv("SHUTDOWN_TIMEOUT_SECONDS", "20")
+	t.Setenv("OUTBOX_WEBHOOK_URL", "https://hooks.example.test/smart-home")
+
+	got, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HTTPAddr != "127.0.0.1:9080" || got.WorkerCount != 4 || got.RetryLimit != 7 || got.ShutdownTimeout != 20*time.Second {
+		t.Fatalf("config=%+v", got)
+	}
+}
+
+func TestFromEnvRejectsExplicitInvalidValues(t *testing.T) {
+	base := map[string]string{
+		"DATABASE_URL":             "postgres://localhost/smart_home",
+		"HTTP_ADDR":                ":8080",
+		"WORKER_COUNT":             "2",
+		"RETRY_LIMIT":              "5",
+		"SHUTDOWN_TIMEOUT_SECONDS": "15",
+		"OUTBOX_WEBHOOK_URL":       "",
+	}
+	cases := []struct {
+		key, value, want string
+	}{
+		{"WORKER_COUNT", "0", "WORKER_COUNT"},
+		{"RETRY_LIMIT", "not-a-number", "RETRY_LIMIT"},
+		{"SHUTDOWN_TIMEOUT_SECONDS", "301", "SHUTDOWN_TIMEOUT_SECONDS"},
+		{"HTTP_ADDR", "8080", "HTTP_ADDR"},
+		{"OUTBOX_WEBHOOK_URL", "http://hooks.example.test", "OUTBOX_WEBHOOK_URL"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			for key, value := range base {
+				t.Setenv(key, value)
+			}
+			t.Setenv(tc.key, tc.value)
+			_, err := FromEnv()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
 
 func TestLoadRuntimeDefaultsAndOverrides(t *testing.T) {
 	values := map[string]string{"DATABASE_URL": "postgres://user:pass@localhost/db?sslmode=disable"}

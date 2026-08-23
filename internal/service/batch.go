@@ -36,6 +36,9 @@ func NewBatch(devices *DeviceService, audit *AuditService, clock model.Clock) *B
 
 // ValidateCommands applies device-specific action rules before dispatch.
 func (s *BatchService) ValidateCommands(ctx context.Context, commands []BatchCommand) error {
+	if s == nil || s.Devices == nil || s.Devices.Repo == nil {
+		return errors.New("device service is not configured")
+	}
 	items := make([]domain.BatchItem, len(commands))
 	for i, command := range commands {
 		items[i] = domain.BatchItem{DeviceID: command.DeviceID, Action: command.Action, Payload: command.Payload}
@@ -79,6 +82,9 @@ func ValidateDeviceCommand(device model.Device, action string) error {
 }
 
 func (s *BatchService) Execute(ctx context.Context, commands []BatchCommand, dispatch func(context.Context, BatchCommand) error) ([]domain.BatchResult, error) {
+	if dispatch == nil {
+		return nil, errors.New("batch dispatcher is not configured")
+	}
 	if err := s.ValidateCommands(ctx, commands); err != nil {
 		return nil, err
 	}
@@ -97,6 +103,9 @@ func (s *BatchService) Execute(ctx context.Context, commands []BatchCommand, dis
 }
 
 func (s *BatchService) AuditResult(ctx context.Context, household int64, member *int64, requestID string, result domain.BatchResult) error {
+	if s == nil || s.Audit == nil {
+		return errors.New("audit service is not configured")
+	}
 	if result.DeviceID <= 0 || requestID == "" {
 		return model.ErrInvalid
 	}

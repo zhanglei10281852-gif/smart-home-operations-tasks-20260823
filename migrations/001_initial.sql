@@ -121,8 +121,12 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
   attempts INT NOT NULL DEFAULT 0,
   available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   locked_at TIMESTAMPTZ,
-  delivered_at TIMESTAMPTZ
+  delivered_at TIMESTAMPTZ,
+  failed_at TIMESTAMPTZ,
+  failure_reason TEXT,
+  CONSTRAINT outbox_attempts_check CHECK (attempts >= 0),
+  CONSTRAINT outbox_terminal_state_check CHECK (delivered_at IS NULL OR failed_at IS NULL)
 );
 CREATE INDEX IF NOT EXISTS idx_telemetry_device_time ON telemetry(device_id, measured_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_household_state ON alerts(household_id, state);
-CREATE INDEX IF NOT EXISTS idx_outbox_ready ON outbox_messages(available_at) WHERE delivered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_outbox_ready ON outbox_messages(available_at) WHERE delivered_at IS NULL AND failed_at IS NULL;

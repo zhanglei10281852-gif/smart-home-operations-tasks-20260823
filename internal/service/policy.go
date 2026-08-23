@@ -26,5 +26,8 @@ func (s *PolicyService) ValidateSchedule(ctx context.Context, windows []domain.S
 	return nil
 }
 func (s *PolicyService) ValidatePlan(start, end time.Time) error {
+	if s == nil || s.Clock == nil {
+		return errors.New("policy clock is not configured")
+	}
 	return domain.ValidatePlanWindow(start, end, s.Clock.Now())
 }

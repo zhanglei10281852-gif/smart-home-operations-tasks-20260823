@@ -119,7 +119,7 @@ func (r *Repository) ReplayableOutbox(ctx context.Context, before time.Time, lim
 	if before.IsZero() || limit <= 0 || limit > 500 {
 		return nil, model.ErrInvalid
 	}
-	rows, err := r.executor(ctx).QueryContext(ctx, `SELECT id,household_id,topic,payload,attempts,available_at,locked_at,delivered_at FROM outbox_messages WHERE delivered_at IS NULL AND available_at <= $1 ORDER BY available_at,id LIMIT $2`, before, limit)
+	rows, err := r.executor(ctx).QueryContext(ctx, `SELECT id,household_id,topic,payload,attempts,available_at,locked_at,delivered_at,failed_at,failure_reason FROM outbox_messages WHERE delivered_at IS NULL AND failed_at IS NULL AND available_at <= $1 ORDER BY available_at,id LIMIT $2`, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (r *Repository) ReplayableOutbox(ctx context.Context, before time.Time, lim
 	var result []model.OutboxMessage
 	for rows.Next() {
 		var m model.OutboxMessage
-		if err := rows.Scan(&m.ID, &m.HouseholdID, &m.Topic, &m.Payload, &m.Attempts, &m.AvailableAt, &m.LockedAt, &m.DeliveredAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.HouseholdID, &m.Topic, &m.Payload, &m.Attempts, &m.AvailableAt, &m.LockedAt, &m.DeliveredAt, &m.FailedAt, &m.FailureReason); err != nil {
 			return nil, err
 		}
 		result = append(result, m)

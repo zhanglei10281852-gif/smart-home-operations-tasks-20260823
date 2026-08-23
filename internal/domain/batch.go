@@ -48,6 +48,9 @@ func ExecuteBatch(ctx context.Context, items []BatchItem, execute func(context.C
 	if err := ValidateBatch(items); err != nil {
 		return nil, err
 	}
+	if execute == nil {
+		return nil, errors.New("batch executor is not configured")
+	}
 	results := make([]BatchResult, len(items))
 	var wg sync.WaitGroup
 	var firstErr error

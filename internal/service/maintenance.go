@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -26,7 +27,13 @@ func NewMaintenance(r interface {
 type MaintenanceReport struct{ SessionsDeleted, PlansExpired, RunsFailed int64 }
 
 func (s *MaintenanceService) Run(ctx context.Context) (MaintenanceReport, error) {
+	if s == nil || s.Repo == nil || s.Clock == nil {
+		return MaintenanceReport{}, errors.New("maintenance is not configured")
+	}
 	now := s.Clock()
+	if now.IsZero() {
+		return MaintenanceReport{}, errors.New("maintenance clock returned zero time")
+	}
 	sessions, err := s.Repo.VacuumSessions(ctx, now)
 	if err != nil {
 		return MaintenanceReport{}, fmt.Errorf("vacuum sessions: %w", err)

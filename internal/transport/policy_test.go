@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,16 +12,20 @@ import (
 func TestRequestPolicyApply(t *testing.T) {
 	policy := RequestPolicy{AllowedMethods: map[string]bool{http.MethodGet: true}, MaxBodyBytes: 1024, Timeout: time.Second, RequireToken: true}
 	request := httptest.NewRequest(http.MethodGet, "https://example.test", nil)
-	if _, err := policy.Apply(context.Background(), request); err == nil {
+	if _, _, err := policy.Apply(context.Background(), request); err == nil {
 		t.Fatal("missing token accepted")
 	}
 	request.Header.Set("Authorization", "Bearer token")
-	derived, err := policy.Apply(context.Background(), request)
+	derived, cancel, err := policy.Apply(context.Background(), request)
 	if err != nil || derived.Context() == request.Context() {
 		t.Fatalf("derived=%v err=%v", derived, err)
 	}
+	cancel()
+	if !errors.Is(derived.Context().Err(), context.Canceled) {
+		t.Fatalf("derived context was not cancelled: %v", derived.Context().Err())
+	}
 	request.Method = http.MethodPost
-	if _, err := policy.Apply(context.Background(), request); err == nil {
+	if _, _, err := policy.Apply(context.Background(), request); err == nil {
 		t.Fatal("disallowed method accepted")
 	}
 }
@@ -40,7 +45,7 @@ func TestRequestPolicyValidation(t *testing.T) {
 
 func TestRequestPolicyNilRequest(t *testing.T) {
 	policy := RequestPolicy{AllowedMethods: map[string]bool{http.MethodGet: true}, MaxBodyBytes: 1, Timeout: time.Second}
-	if _, err := policy.Apply(context.Background(), nil); err == nil {
+	if _, _, err := policy.Apply(context.Background(), nil); err == nil {
 		t.Fatal("nil request accepted")
 	}
 }

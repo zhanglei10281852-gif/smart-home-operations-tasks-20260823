@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/config"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/db"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/httpapi"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/repo"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/service"
+	"github.com/zhanglei10281852-gif/smart-home-operations/internal/transport"
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/worker"
 	"log/slog"
 	"net/http"
@@ -16,6 +19,12 @@ import (
 	"syscall"
 	"time"
 )
+
+type webhookPublisher struct{ webhook transport.Webhook }
+
+func (p webhookPublisher) Publish(ctx context.Context, message model.OutboxMessage) error {
+	return p.webhook.SendWithKey(ctx, message, fmt.Sprintf("outbox-%d", message.ID))
+}
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -46,9 +55,38 @@ func main() {
 	automation := service.NewAutomation(r, clock)
 	reports := service.NewReport(r)
 	server := httpapi.NewServer(households, authn, devices, telemetry, energy, automation, reports, logger)
+	server.Scope = r
+	server.Readiness = func(ctx context.Context) error {
+		_, err := database.Health(ctx, time.Now)
+		return err
+	}
 	runner := worker.New(r, automation, logger, cfg.WorkerCount)
-	go runner.Run(ctx)
-	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	go func() {
+		if err := runner.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("automation worker stopped", "error", err)
+			cancel()
+		}
+	}()
+	maintenance := worker.Scheduler{Maintenance: service.NewMaintenance(r, time.Now), Logger: logger, Interval: time.Minute}
+	go func() {
+		if err := maintenance.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("maintenance worker stopped", "error", err)
+			cancel()
+		}
+	}()
+	if cfg.OutboxWebhookURL != "" {
+		client := transport.NewClient(cfg.OutboxWebhookURL)
+		outbox := &worker.OutboxRunner{Repo: r, Publisher: webhookPublisher{webhook: transport.Webhook{Client: client, URL: cfg.OutboxWebhookURL}}, Logger: logger, RetryLimit: cfg.RetryLimit, PollInterval: 100 * time.Millisecond}
+		go func() {
+			if err := outbox.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("outbox worker stopped", "error", err)
+				cancel()
+			}
+		}()
+	} else {
+		logger.Info("outbox delivery disabled; messages will remain durable", "config", "OUTBOX_WEBHOOK_URL")
+	}
+	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: server.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)

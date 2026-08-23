@@ -15,9 +15,37 @@ type Metrics struct {
 	LatencyNanos atomic.Int64
 }
 
+type responseState struct {
+	http.ResponseWriter
+	committed bool
+	status    int
+}
+
+func (w *responseState) WriteHeader(status int) {
+	if w.committed {
+		return
+	}
+	w.committed = true
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseState) Write(data []byte) (int, error) {
+	if !w.committed {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *responseState) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (m *Metrics) Observe(start time.Time, failed bool) {
 	m.Requests.Add(1)
-	m.LatencyNanos.Add(time.Since(start).Nanoseconds())
+	elapsed := time.Since(start)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	m.LatencyNanos.Add(elapsed.Nanoseconds())
 	if failed {
 		m.Failures.Add(1)
 	}
@@ -30,13 +58,19 @@ func AccessLog(logger *slog.Logger, metrics *Metrics, next http.Handler) http.Ha
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		failed := false
+		tracked := &responseState{ResponseWriter: w}
 		defer func() {
 			if recover() != nil {
 				failed = true
 				if logger != nil {
 					logger.Error("panic", "stack", string(debug.Stack()))
 				}
-				http.Error(w, "internal", 500)
+				if !tracked.committed {
+					http.Error(tracked, "internal", http.StatusInternalServerError)
+				}
+			}
+			if tracked.status >= http.StatusInternalServerError {
+				failed = true
 			}
 			if metrics != nil {
 				metrics.Observe(start, failed)
@@ -45,7 +79,7 @@ func AccessLog(logger *slog.Logger, metrics *Metrics, next http.Handler) http.Ha
 				logger.Info("http request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(tracked, r)
 	})
 }
 

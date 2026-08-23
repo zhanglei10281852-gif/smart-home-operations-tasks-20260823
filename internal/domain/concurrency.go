@@ -14,6 +14,12 @@ func Parallel[T any](ctx context.Context, values []T, fn func(context.Context, T
 		workers = 1
 	}
 	errs := make([]error, len(values))
+	if fn == nil {
+		for i := range errs {
+			errs[i] = errors.New("parallel callback is not configured")
+		}
+		return errs
+	}
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {

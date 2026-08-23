@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/zhanglei10281852-gif/smart-home-operations/internal/model"
@@ -19,21 +19,6 @@ const requestContextKey contextKey = "request-id"
 func RequestID(ctx context.Context) string {
 	value, _ := ctx.Value(requestContextKey).(string)
 	return value
-}
-
-func withRequestContext(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := strings.TrimSpace(w.Header().Get("X-Request-ID"))
-		if id == "" {
-			id = strings.TrimSpace(r.Header.Get("X-Request-ID"))
-		}
-		if id == "" {
-			id = "req-" + time.Now().UTC().Format("20060102T150405.000000000")
-		}
-		ctx := context.WithValue(r.Context(), requestContextKey, id)
-		w.Header().Set("X-Request-ID", id)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
 }
 
 func accessLog(next http.Handler, logger *slog.Logger) http.Handler {
@@ -49,17 +34,27 @@ func accessLog(next http.Handler, logger *slog.Logger) http.Handler {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status    int
+	committed bool
 }
 
 func (w *statusWriter) WriteHeader(status int) {
+	if w.committed {
+		return
+	}
 	w.status = status
+	w.committed = true
 	w.ResponseWriter.WriteHeader(status)
 }
 
 func (w *statusWriter) Write(data []byte) (int, error) {
+	if !w.committed {
+		w.WriteHeader(http.StatusOK)
+	}
 	return w.ResponseWriter.Write(data)
 }
+
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func contentTypeJSON(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +77,8 @@ func decodeStrict(r *http.Request, target any) error {
 		return model.ErrInvalid
 	}
 	var extra any
-	if err := decoder.Decode(&extra); err == nil {
-		return errors.New("request contains multiple JSON values")
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return model.ErrInvalid
 	}
 	return nil
 }

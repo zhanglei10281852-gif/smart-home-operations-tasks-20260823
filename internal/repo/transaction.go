@@ -23,7 +23,10 @@ func (r *Repository) TransitionWithAudit(ctx context.Context, u TransactionalDev
 		if err != nil {
 			return fmt.Errorf("update device state: %w", err)
 		}
-		n, _ := res.RowsAffected()
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("inspect device update: %w", err)
+		}
 		if n != 1 {
 			return model.ErrConflict
 		}
@@ -43,9 +46,9 @@ func (r *Repository) WithSerializable(ctx context.Context, fn func(context.Conte
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	txctx := context.WithValue(ctx, serialTxKey{}, tx)
 	if err = fn(txctx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

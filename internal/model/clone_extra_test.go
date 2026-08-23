@@ -7,7 +7,7 @@ import (
 
 func TestSessionAndPlanLifecyclePredicates(t *testing.T) {
 	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
-	session := Session{CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)}
+	session := Session{ID: "session-1", MemberID: 1, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour)}
 	if !session.ActiveAt(now) {
 		t.Fatal("active session rejected")
 	}
@@ -45,6 +45,10 @@ func TestMemberCanRole(t *testing.T) {
 	member.Active = false
 	if member.Can(RoleViewer) {
 		t.Fatal("inactive member authorized")
+	}
+	member.Active = true
+	if member.Can(Role("administrator")) || (Member{Role: Role("administrator"), Active: true}).Can(RoleViewer) {
+		t.Fatal("unknown role entered the hierarchy")
 	}
 }
 

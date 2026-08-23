@@ -37,3 +37,33 @@ func TestCircuitCancellationDoesNotCountAsFailure(t *testing.T) {
 		t.Fatalf("cancelled call opened circuit: %s", c.State(now))
 	}
 }
+
+func TestHalfOpenCircuitAllowsOnlyOneProbe(t *testing.T) {
+	now := time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
+	c := NewCircuit(1, time.Minute)
+	failure := errors.New("gateway down")
+	_ = c.Call(context.Background(), now, func(context.Context) error { return failure })
+
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	probeDone := make(chan error, 1)
+	go func() {
+		probeDone <- c.Call(context.Background(), now.Add(time.Minute), func(context.Context) error {
+			close(probeStarted)
+			<-releaseProbe
+			return nil
+		})
+	}()
+	<-probeStarted
+	called := false
+	if err := c.Call(context.Background(), now.Add(time.Minute), func(context.Context) error { called = true; return nil }); err == nil {
+		t.Fatal("concurrent half-open probe was allowed")
+	}
+	if called {
+		t.Fatal("rejected probe callback ran")
+	}
+	close(releaseProbe)
+	if err := <-probeDone; err != nil {
+		t.Fatal(err)
+	}
+}
