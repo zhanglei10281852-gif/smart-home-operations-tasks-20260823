@@ -88,11 +88,17 @@ func (r *Repository) RevokeSession(ctx context.Context, id string, now time.Time
 
 func (r *Repository) CreateDevice(ctx context.Context, d model.Device, capabilities []string) (model.Device, error) {
 	var out model.Device
-	err := r.executor(ctx).QueryRowContext(ctx, `INSERT INTO devices(household_id,external_id,kind,state,firmware) VALUES($1,$2,$3,$4,$5) RETURNING id,household_id,external_id,kind,state,firmware,version,created_at`, d.HouseholdID, d.ExternalID, d.Kind, model.DevicePending, d.Firmware).Scan(&out.ID, &out.HouseholdID, &out.ExternalID, &out.Kind, &out.State, &out.Firmware, &out.Version, &out.CreatedAt)
+	err := r.DB.WithTx(ctx, func(txctx context.Context) error {
+		ex := r.executor(txctx)
+		if e := ex.QueryRowContext(txctx, `INSERT INTO devices(household_id,external_id,kind,state,firmware) VALUES($1,$2,$3,$4,$5) RETURNING id,household_id,external_id,kind,state,firmware,version,created_at`, d.HouseholdID, d.ExternalID, d.Kind, model.DevicePending, d.Firmware).Scan(&out.ID, &out.HouseholdID, &out.ExternalID, &out.Kind, &out.State, &out.Firmware, &out.Version, &out.CreatedAt); e != nil {
+			return classifyWriteError(e)
+		}
+		if e := r.insertDeviceCapabilities(txctx, out.ID, capabilities); e != nil {
+			return e
+		}
+		return nil
+	})
 	if err != nil {
-		return model.Device{}, classifyWriteError(err)
-	}
-	if err := r.insertDeviceCapabilities(ctx, out.ID, capabilities); err != nil {
 		return model.Device{}, err
 	}
 	return out, nil
