@@ -74,9 +74,10 @@ func main() {
 			cancel()
 		}
 	}()
+	var outbox *worker.OutboxRunner
 	if cfg.OutboxWebhookURL != "" {
 		client := transport.NewClient(cfg.OutboxWebhookURL)
-		outbox := &worker.OutboxRunner{Repo: r, Publisher: webhookPublisher{webhook: transport.Webhook{Client: client, URL: cfg.OutboxWebhookURL}}, Logger: logger, RetryLimit: cfg.RetryLimit, PollInterval: 100 * time.Millisecond}
+		outbox = &worker.OutboxRunner{Repo: r, Publisher: webhookPublisher{webhook: transport.Webhook{Client: client, URL: cfg.OutboxWebhookURL}}, Logger: logger, RetryLimit: cfg.RetryLimit, PollInterval: 100 * time.Millisecond, AckTimeout: cfg.ShutdownTimeout}
 		go func() {
 			if err := outbox.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				logger.Error("outbox worker stopped", "error", err)
@@ -97,5 +98,13 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)
+	}
+	// Give an in-flight outbox publish+acknowledge cycle a bounded opportunity to
+	// finish before the process exits, so a message the external webhook already
+	// accepted is reliably marked delivered instead of being redelivered on restart.
+	if outbox != nil {
+		if err := outbox.Wait(cfg.ShutdownTimeout); err != nil && !errors.Is(err, worker.ErrDrainTimeout) {
+			logger.Error("outbox shutdown wait failed", "error", err)
+		}
 	}
 }

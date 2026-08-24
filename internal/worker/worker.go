@@ -98,6 +98,10 @@ type OutboxRunner struct {
 	Logger       *slog.Logger
 	RetryLimit   int
 	PollInterval time.Duration
+	AckTimeout   time.Duration
+
+	doneMu sync.Mutex
+	done   chan struct{}
 }
 
 func (w *OutboxRunner) outboxStore() OutboxStore {
@@ -105,6 +109,25 @@ func (w *OutboxRunner) outboxStore() OutboxStore {
 		return w.Store
 	}
 	return w.Repo
+}
+
+func (w *OutboxRunner) ackTimeout() time.Duration {
+	if w.AckTimeout > 0 {
+		return w.AckTimeout
+	}
+	return 5 * time.Second
+}
+
+// prepare initializes the shutdown signal channel on the caller's goroutine so
+// that Wait can observe it without racing the Run goroutine. It is idempotent
+// and safe to call from either the Run or Wait side.
+func (w *OutboxRunner) prepare() chan struct{} {
+	w.doneMu.Lock()
+	defer w.doneMu.Unlock()
+	if w.done == nil {
+		w.done = make(chan struct{})
+	}
+	return w.done
 }
 
 func (w *OutboxRunner) Run(ctx context.Context) error {
@@ -117,15 +140,40 @@ func (w *OutboxRunner) Run(ctx context.Context) error {
 	if w.RetryLimit < 1 {
 		w.RetryLimit = 5
 	}
+	done := w.prepare()
+	defer close(done)
 	ticker := time.NewTicker(w.PollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			// The loop is exiting, but process may still be acknowledging a
+			// message it just published. Because acknowledgement is synchronous
+			// and uses a cancellation-independent context, the delivered state
+			// has already been durably recorded before process returned, so no
+			// externally received message is left un-acknowledged.
 			return ctx.Err()
 		case <-ticker.C:
-			_ = w.process(ctx)
+			w.process(ctx)
 		}
+	}
+}
+
+// Wait blocks until Run has fully returned, or until timeout elapses. Callers
+// use it during shutdown to give an in-flight publish+acknowledge cycle a
+// bounded opportunity to finish before the process exits, avoiding redelivery
+// of a message the external webhook already accepted.
+func (w *OutboxRunner) Wait(timeout time.Duration) error {
+	done := w.prepare()
+	if timeout <= 0 {
+		<-done
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-time.After(timeout):
+		return ErrDrainTimeout
 	}
 }
 func (w *OutboxRunner) RunOnce(ctx context.Context) error {
@@ -143,9 +191,17 @@ func (w *OutboxRunner) process(ctx context.Context) error {
 		}
 		return err
 	}
+	// Publish and acknowledge within the same critical section so the delivered
+	// state is durably recorded before process returns. Acknowledgement runs on
+	// a cancellation-independent, bounded context: if shutdown cancels ctx after
+	// the webhook already returned success, the AcknowledgeOutbox write still
+	// commits before process yields. This closes the window where a message
+	// accepted by the external system could be redelivered after a restart.
 	pubErr := w.Publisher.Publish(ctx, msg)
 	if pubErr == nil {
-		go w.acknowledgePublished(ctx, store, msg.ID)
+		if ackErr := w.acknowledgePublished(ctx, store, msg.ID); ackErr != nil && w.Logger != nil {
+			w.Logger.Error("outbox delivery state was not persisted", "id", msg.ID, "error", ackErr)
+		}
 		return nil
 	}
 	persistCtx, cancel := persistenceContext(ctx)
@@ -166,16 +222,22 @@ func (w *OutboxRunner) process(ctx context.Context) error {
 	return pubErr
 }
 
-func (w *OutboxRunner) acknowledgePublished(ctx context.Context, store OutboxStore, id int64) {
-	persistCtx, cancel := persistenceContext(ctx)
+func (w *OutboxRunner) acknowledgePublished(ctx context.Context, store OutboxStore, id int64) error {
+	persistCtx, cancel := persistenceContext(ctx, w.ackTimeout())
 	defer cancel()
-	if err := store.AcknowledgeOutbox(persistCtx, id); err != nil && w.Logger != nil {
-		w.Logger.Error("outbox delivery state was not persisted", "id", id, "error", err)
-	}
+	return store.AcknowledgeOutbox(persistCtx, id)
 }
 
-func persistenceContext(parent context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+// persistenceContext returns a bounded context that survives cancellation of
+// the parent, so durable acknowledgements and retries still commit during
+// shutdown. The budget defaults to 5 seconds and is raised to the runner's
+// shutdown timeout when one is configured.
+func persistenceContext(parent context.Context, budget ...time.Duration) (context.Context, context.CancelFunc) {
+	timeout := 5 * time.Second
+	if len(budget) > 0 && budget[0] > 0 {
+		timeout = budget[0]
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
 }
 
 type MemoryPublisher struct {
@@ -195,3 +257,7 @@ func (p *MemoryPublisher) Publish(_ context.Context, m model.OutboxMessage) erro
 }
 
 var ErrNoWork = errors.New("no work")
+
+// ErrDrainTimeout is returned by OutboxRunner.Wait when an in-flight
+// publish+acknowledge cycle does not settle within the shutdown budget.
+var ErrDrainTimeout = errors.New("outbox runner did not stop in time")
