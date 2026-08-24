@@ -56,10 +56,14 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 	if attempts < 1 {
 		attempts = 1
 	}
-	attemptCtx := retryAttemptContext(ctx)
 	var last error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		httpReq, err := http.NewRequestWithContext(attemptCtx, req.Method, target, bytes.NewReader(encodedBody))
+		// Honor caller cancellation before building the next attempt: a cancel
+		// that landed during the previous backoff must not reach the remote.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, req.Method, target, bytes.NewReader(encodedBody))
 		if err != nil {
 			return err
 		}
@@ -99,9 +103,9 @@ func (c *Client) Do(ctx context.Context, req Request, out any) error {
 		if attempt < attempts {
 			timer := time.NewTimer(c.Backoff * time.Duration(attempt))
 			select {
-			case <-attemptCtx.Done():
+			case <-ctx.Done():
 				timer.Stop()
-				return attemptCtx.Err()
+				return ctx.Err()
 			case <-timer.C:
 			}
 		}

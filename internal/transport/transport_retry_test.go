@@ -2,12 +2,14 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestClientRetriesWithCompleteBodyAndClosesResponses(t *testing.T) {
@@ -67,4 +69,47 @@ func TestWebhookSendsStableIdempotencyKey(t *testing.T) {
 	if got != "outbox-7" {
 		t.Fatalf("idempotency key=%q", got)
 	}
+}
+
+func TestClientCancelDuringBackoffStopsRetries(t *testing.T) {
+	var mu sync.Mutex
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		// First attempt: server-side failure that would normally trigger a retry.
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL)
+	client.Backoff = time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel during the backoff window between the first and second attempt.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err := client.Do(ctx, Request{Method: http.MethodPost, Body: map[string]string{"command": "on"}}, nil)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if elapsed >= client.Backoff {
+		t.Fatalf("elapsed=%v backoff=%v; cancellation did not stop the timer", elapsed, client.Backoff)
+	}
+	if got := clientAttempts(&mu, &attempts); got != 1 {
+		t.Fatalf("attempts=%d want 1; cancellation reached the remote a second time", got)
+	}
+}
+
+func clientAttempts(mu *sync.Mutex, attempts *int) int {
+	mu.Lock()
+	defer mu.Unlock()
+	return *attempts
 }

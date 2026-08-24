@@ -44,10 +44,3 @@ func (p RequestPolicy) Apply(ctx context.Context, req *http.Request) (*http.Requ
 	derived, cancel := context.WithTimeout(ctx, p.Timeout)
 	return req.WithContext(derived), cancel, nil
 }
-
-func retryAttemptContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return context.WithoutCancel(ctx)
-}
