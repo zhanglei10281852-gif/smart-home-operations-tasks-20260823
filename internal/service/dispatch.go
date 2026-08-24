@@ -60,7 +60,11 @@ func (d *Dispatcher) Dispatch(ctx context.Context, household int64, member *int6
 		if d.Store != nil {
 			auditErr := d.Store.AddAudit(ctx, model.AuditEvent{HouseholdID: household, ActorMemberID: member, RequestID: requestID, ObjectType: "device", ObjectID: fmt.Sprint(command.DeviceID), Action: record.State})
 			if auditErr != nil {
-				return results, fmt.Errorf("audit dispatch: %w", retryCommandAfterAuditFailure(ctx, send, command, auditErr))
+				// The command has already been accepted by the device. Do not
+				// re-send it: replaying a non-idempotent command would duplicate
+				// the external side effect. Surface the audit failure directly so
+				// the caller sees that dispatch succeeded but the audit did not.
+				return results, fmt.Errorf("audit dispatch: %w", auditErr)
 			}
 		}
 	}

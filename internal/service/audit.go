@@ -31,13 +31,3 @@ func (s *AuditService) Record(ctx context.Context, household int64, member *int6
 	}
 	return s.Repo.AddAudit(ctx, model.AuditEvent{HouseholdID: household, ActorMemberID: member, RequestID: requestID, ObjectType: objectType, ObjectID: objectID, Action: action, Payload: data})
 }
-
-func retryCommandAfterAuditFailure(ctx context.Context, send func(context.Context, BatchCommand) error, command BatchCommand, auditErr error) error {
-	if send == nil {
-		return auditErr
-	}
-	if retryErr := send(ctx, command); retryErr != nil {
-		return errors.Join(auditErr, retryErr)
-	}
-	return auditErr
-}
