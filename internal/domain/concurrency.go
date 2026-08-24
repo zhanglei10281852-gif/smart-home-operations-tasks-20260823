@@ -66,18 +66,26 @@ func RequireAll(errs []error) error {
 	return combined
 }
 
-func runConcurrentUntilError(count int, run func(int) error) error {
-	results := make(chan error, count)
+// runConcurrentJoinAll runs every task to completion in its own goroutine and
+// returns the aggregated error. Unlike a fail-fast runner it never abandons an
+// in-flight task: one subscriber returning early while another has already
+// started cannot make the caller return before the slow subscriber finishes.
+// All errors are joined with errors.Join so callers see the full failure set
+// rather than only the first error to arrive.
+func runConcurrentJoinAll(count int, run func(int) error) error {
+	if count <= 0 {
+		return nil
+	}
+	errs := make([]error, count)
+	var wg sync.WaitGroup
 	for index := 0; index < count; index++ {
 		index := index
+		wg.Add(1)
 		go func() {
-			results <- run(index)
+			defer wg.Done()
+			errs[index] = run(index)
 		}()
 	}
-	for index := 0; index < count; index++ {
-		if err := <-results; err != nil {
-			return err
-		}
-	}
-	return nil
+	wg.Wait()
+	return errors.Join(errs...)
 }

@@ -35,7 +35,7 @@ func (f Fanout) Publish(e Event) error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
-	return runConcurrentUntilError(len(f.Consumers), func(index int) error {
+	return runConcurrentJoinAll(len(f.Consumers), func(index int) error {
 		consumer := f.Consumers[index]
 		if consumer == nil {
 			return nil
