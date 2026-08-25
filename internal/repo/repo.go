@@ -231,22 +231,28 @@ func (r *Repository) SetPlanState(ctx context.Context, id int64, from, to model.
 
 func (r *Repository) CreateAutomation(ctx context.Context, a model.Automation, actions []model.AutomationAction) (model.Automation, error) {
 	var out model.Automation
-	ex := r.executor(ctx)
-	if err := ex.QueryRowContext(ctx, `INSERT INTO automations(household_id,name,state,trigger_kind) VALUES($1,$2,$3,$4) RETURNING id,household_id,name,state,trigger_kind,created_at`, a.HouseholdID, a.Name, model.AutomationDraft, a.TriggerKind).Scan(&out.ID, &out.HouseholdID, &out.Name, &out.State, &out.TriggerKind, &out.CreatedAt); err != nil {
-		return model.Automation{}, classifyWriteError(err)
-	}
-	for _, action := range actions {
-		result, err := ex.ExecContext(ctx, `INSERT INTO automation_actions(automation_id,device_id,action,ordinal) SELECT $1,id,$3,$4 FROM devices WHERE id=$2 AND household_id=$5 AND state='enabled'`, out.ID, action.DeviceID, action.Action, action.Ordinal, a.HouseholdID)
-		if err != nil {
-			return model.Automation{}, classifyWriteError(err)
+	err := r.DB.WithTx(ctx, func(txctx context.Context) error {
+		ex := r.executor(txctx)
+		if err := ex.QueryRowContext(txctx, `INSERT INTO automations(household_id,name,state,trigger_kind) VALUES($1,$2,$3,$4) RETURNING id,household_id,name,state,trigger_kind,created_at`, a.HouseholdID, a.Name, model.AutomationDraft, a.TriggerKind).Scan(&out.ID, &out.HouseholdID, &out.Name, &out.State, &out.TriggerKind, &out.CreatedAt); err != nil {
+			return classifyWriteError(err)
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return model.Automation{}, err
+		for _, action := range actions {
+			result, err := ex.ExecContext(txctx, `INSERT INTO automation_actions(automation_id,device_id,action,ordinal) SELECT $1,id,$3,$4 FROM devices WHERE id=$2 AND household_id=$5 AND state='enabled'`, out.ID, action.DeviceID, action.Action, action.Ordinal, a.HouseholdID)
+			if err != nil {
+				return classifyWriteError(err)
+			}
+			affected, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if affected != 1 {
+				return fmt.Errorf("%w: automation device %d is not enabled in household %d", model.ErrConflict, action.DeviceID, a.HouseholdID)
+			}
 		}
-		if affected != 1 {
-			return model.Automation{}, fmt.Errorf("%w: automation device %d is not enabled in household %d", model.ErrConflict, action.DeviceID, a.HouseholdID)
-		}
+		return nil
+	})
+	if err != nil {
+		return model.Automation{}, err
 	}
 	return out, nil
 }
