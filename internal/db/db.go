@@ -33,7 +33,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 	return &DB{SQL: database}, nil
 }
 func (d *DB) Close() error { return d.SQL.Close() }
-func (d *DB) WithTx(ctx context.Context, fn func(context.Context) error) error {
+func (d *DB) WithTx(ctx context.Context, fn func(context.Context) error) (err error) {
 	if d == nil || d.SQL == nil || fn == nil {
 		return fmt.Errorf("transaction is not configured")
 	}
@@ -42,13 +42,27 @@ func (d *DB) WithTx(ctx context.Context, fn func(context.Context) error) error {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	txctx := context.WithValue(ctx, txKey{}, tx)
+	committed := false
+	// Recover from a panic in the transaction body so the connection is rolled
+	// back and returned to the pool instead of being abandoned mid-transaction.
+	// The original panic is re-panicked after cleanup so callers' recovery
+	// logic (e.g. HTTP middleware) still observes it.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = tx.Rollback()
+			panic(r)
+		}
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	if err = fn(txctx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit transaction: %w", err)
 	}
+	committed = true
 	return nil
 }
 
