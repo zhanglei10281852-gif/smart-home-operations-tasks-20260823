@@ -29,11 +29,19 @@ type CommandExecutor interface {
 	Execute(context.Context, Command) (CommandResult, error)
 }
 
+// CommandExecutionContext derives a bounded execution context from the caller's
+// context so that a caller cancellation propagates to the device executor while a
+// deadline still caps the run. The parent is detached only when it is already
+// done: a finished caller must not abort the freshly created context before the
+// executor can observe the outcome, yet the timeout remains the hard bound.
 func CommandExecutionContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+	if err := parent.Err(); err != nil {
+		return context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
+	}
+	return context.WithTimeout(parent, 30*time.Second)
 }
 
 func ValidateCommand(c Command) error {
